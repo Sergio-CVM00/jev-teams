@@ -1,6 +1,8 @@
 <div align="center">
 
-<img src="assets/hero.png" alt="Jev and Microsoft Teams shaking hands" width="420">
+<img src="assets/hero.png" alt="A Jev neural-network orb and a purple chat-bubble figure shaking hands" width="460">
+
+<sub>Header illustration generated with ChatGPT. Not the official Microsoft Teams or TypeSafe mark.</sub>
 
 # jev-teams
 
