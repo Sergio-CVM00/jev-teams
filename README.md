@@ -67,7 +67,7 @@ teams.py read [--last N] [--json]             # the chat that is already open
 
 ## What leaves your machine
 
-Chat titles, and only on the ambiguous path. This is the literal request, verbatim:
+Chat titles, the words you typed, and nothing else, and only on the ambiguous path. This is the literal request, verbatim:
 
 ```json
 {"schema": "jev.action_choice_request_v1",
@@ -80,12 +80,14 @@ Chat titles, and only on the ambiguous path. This is the literal request, verbat
    {"id": "abstain",   "description": "None of these chats is the one meant; ask the person."}]}
 ```
 
-No message body, no author, no text. `reobserve` and `abstain` are in the candidate set,
-so the model can decline instead of guessing. Message bodies are parsed locally and
-printed to your terminal; they never reach TypeSafe.
+No message body, no author, no message text. The `goal` field carries the words you
+typed, so a query you would rather not send is a query you should not type.
+`reobserve` and `abstain` are in the candidate set, so the model can decline instead
+of guessing. Message bodies are parsed locally and printed to your terminal; they
+never reach TypeSafe.
 
-Chat titles are often project names or people's names. Treat that list, and only that
-list, as what you are disclosing.
+Chat titles are often project names or people's names, and your own query may be
+anything. Treat both, and only those, as what you are disclosing.
 
 ## Install
 
@@ -112,6 +114,8 @@ The person signs in to Teams themselves. No script here ever types credentials.
 | `JEV_BIN` | `jev` | Jev CLI |
 | `JEV_FLOOR` | `0.65` | minimum confidence to accept a Jev pick |
 | `JEV_MAX_CANDIDATES` | `30` | chat titles sent to Jev |
+| `JEV_WORK_TIMEOUT` | `30` | seconds before a helper is abandoned |
+| `JEV_WORK_CHAT_HOTKEY` | `cmd,2` | keys that switch Teams to the Chat rail |
 
 ## Measured
 
@@ -138,8 +142,10 @@ Below `JEV_FLOOR` the script exits `6` and prints only a reminder to run `chats`
 the designed outcome for an ambiguous name, not a failure: show the person the list
 rather than picking for them.
 
-**Exit codes:** `0` ok · `2` FAIL (not running, driver missing, not signed in) ·
-`4` UNVERIFIED (clicked, but the window never confirmed the chat opened) · `6` ABSTAIN.
+**Exit codes:** `0` ok · `2` FAIL (not running, driver missing, not signed in, a
+helper that timed out or answered something other than JSON) · `4` UNVERIFIED
+(clicked, but the window never confirmed the chat opened) · `6` ABSTAIN · `130`
+interrupted.
 
 ## Limits
 
@@ -154,6 +160,10 @@ rather than picking for them.
 - **Chat rows are an English UI surface.** The row parser matches the English labels
   (`Chat`, `Group chat`, `Meeting chat`, `Last message`). A localised Teams UI will
   need those patterns adjusted.
+- **A long sidebar is only partly searched.** `JEV_MAX_CANDIDATES` caps how many titles
+  reach Jev, default 30. Past that, a name that matches nothing as a substring cannot be
+  found. The script says so rather than claiming nothing matched:
+  `only the first 30 of 87 chats were offered`. Raise the cap, or pass an exact name.
 - **This is not a general computer-use loop.** It drives one known app by one known
   shape, which is why it is fast and why it cannot wander.
 

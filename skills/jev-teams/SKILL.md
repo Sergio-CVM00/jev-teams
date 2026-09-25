@@ -45,18 +45,25 @@ To answer "what is new", start with `chats --unread`, then `open <name> --read` 
 3. **Jev**, over chat *titles only*. The candidate set also carries `reobserve` and
    `abstain`, so the model can decline instead of guessing.
 
-Below `JEV_FLOOR` (0.65 by default) the script exits `6` and prints nothing but a
-`chats` reminder. That is the designed outcome for an ambiguous name, not a failure:
-show the person the list instead of picking for them.
+Below `JEV_FLOOR` (0.65 by default) the script exits `6` and prints a `chats`
+reminder. That is the designed outcome for an ambiguous name, not a failure: show the
+person the list instead of picking for them.
 
-**Exit codes:** `0` ok, `2` FAIL (Teams not running, driver missing, not signed in),
-`4` UNVERIFIED (clicked, but the window never confirmed the chat opened), `6` ABSTAIN.
+If `JEV_MAX_CANDIDATES` (30 by default) cut the candidate list, the message says how
+many chats were actually offered. A "no match" that only looked at part of the sidebar
+is not a clean miss, and the script will not pretend otherwise.
+
+**Exit codes:** `0` ok, `2` FAIL (Teams not running, driver missing, not signed in, a
+helper that timed out or answered something other than JSON), `4` UNVERIFIED (clicked,
+but the window never confirmed the chat opened), `6` ABSTAIN, `130` interrupted.
 
 ## What leaves the machine
 
-Only chat **titles**, and only on the Jev path in step 3. Message bodies are read locally
-and are never sent to TypeSafe. Still: a chat title is often a project or a person's
-name, so treat the title list as the thing you are disclosing.
+Chat **titles** and the **words the person typed**, and only on the Jev path in step 3.
+The query you pass is sent in the request's `goal` field, so a query you would rather
+not send is one you should not type. Message bodies are read locally and are never sent
+to TypeSafe. Still: a chat title is often a project or a person's name, so treat both
+the titles and the query as the things you are disclosing.
 
 ## What this cannot do
 
@@ -69,6 +76,9 @@ name, so treat the title list as the thing you are disclosing.
   removed from the accessibility tree, and the script exits `2` saying so. Behind other
   windows is fine, and it never needs focus. If Teams is not running it is started in
   the background, but a Teams that starts hidden may need the person to show it once.
+- **Chat rows are an English UI surface.** The row parser matches the English labels
+  (`Chat`, `Group chat`, `Meeting chat`, `Last message`). A localised Teams UI needs
+  those patterns adjusted in the script.
 - **Not a general computer-use loop.** It drives one known app by one known shape. For
   open-ended desktop work use a general computer-use skill.
 

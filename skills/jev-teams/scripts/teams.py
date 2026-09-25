@@ -3,19 +3,22 @@
 
 Read-only by design: list chats, open one, read its messages. Everything runs in
 the background through cua-driver (no focus steal, no screenshots). Jev is asked
-only to resolve an ambiguous chat name, and it only ever sees chat titles.
+only to resolve an ambiguous chat name, and it only ever sees chat titles and the
+words the person typed.
 
   teams.py chats [--unread] [--json]
   teams.py open QUERY [--read] [--last N] [--json]
   teams.py read [--last N] [--json]
 
 Environment:
-  CUA_DRIVER_BIN   accessibility/screen-recording driver   (default: cua-driver)
-  JEV_BIN          Jev CLI                                  (default: jev)
-  JEV_FLOOR        minimum confidence to accept a Jev pick (default: 0.65)
-  JEV_MAX_CANDIDATES  chat titles sent to Jev               (default: 30)
+  CUA_DRIVER_BIN      accessibility/screen-recording driver   (default: cua-driver)
+  JEV_BIN             Jev CLI                                  (default: jev)
+  JEV_FLOOR           minimum confidence to accept a Jev pick (default: 0.65)
+  JEV_MAX_CANDIDATES  chat titles sent to Jev                  (default: 30)
+  JEV_WORK_TIMEOUT    seconds before a helper is abandoned     (default: 30)
+  JEV_WORK_CHAT_HOTKEY  keys that switch Teams to Chat         (default: cmd,2)
 
-Exit codes: 0 ok, 2 FAIL, 4 UNVERIFIED, 6 ABSTAIN.
+Exit codes: 0 ok, 2 FAIL, 4 UNVERIFIED, 6 ABSTAIN, 130 interrupted.
 """
 from __future__ import annotations
 
@@ -31,36 +34,51 @@ DRIVER = os.environ.get("CUA_DRIVER_BIN", "cua-driver")
 JEV = os.environ.get("JEV_BIN", "jev")
 JEV_FLOOR = float(os.environ.get("JEV_FLOOR", "0.65"))
 JEV_MAX_CANDIDATES = int(os.environ.get("JEV_MAX_CANDIDATES", "30"))
+TIMEOUT = int(os.environ.get("JEV_WORK_TIMEOUT", "30"))
 MESSAGE_MARKER = "More message options"
-CHAT_HOTKEY = ["cmd", "2"]  # Teams: switch the left rail to Chat
+CHAT_HOTKEY = os.environ.get("JEV_WORK_CHAT_HOTKEY", "cmd,2").split(",")  # Teams: switch the left rail to Chat
 
 
 class Fail(Exception):
     pass
 
 
-def call(tool: str, args: dict) -> dict:
-    proc = subprocess.run(
-        [DRIVER, "call", tool, json.dumps(args)],
-        capture_output=True, text=True, timeout=30,
-    )
+def run_json(argv: list[str], payload: dict | None, what: str) -> dict:
+    """Run a helper that answers JSON on stdout. Every failure mode becomes a Fail,
+    so the documented exit codes hold whatever goes wrong underneath."""
+    try:
+        proc = subprocess.run(
+            argv, input=None if payload is None else json.dumps(payload),
+            capture_output=True, text=True, timeout=TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise Fail(f"{what} timed out after {TIMEOUT}s") from exc
+    except OSError as exc:
+        raise Fail(f"{what} could not be run ({exc.strerror})") from exc
     if proc.returncode != 0:
-        raise Fail(f"cua-driver {tool} failed: {(proc.stderr or proc.stdout).strip()[:300]}")
+        raise Fail(f"{what} failed: {(proc.stderr or proc.stdout).strip()[:300]}")
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        raise Fail(f"cua-driver {tool} returned non-JSON output") from exc
+        raise Fail(f"{what} returned non-JSON output") from exc
 
 
-def act(tool: str, args: dict) -> dict:
-    """Send input in the background; if the driver refuses because the window sits on
-    another Space, retry once in foreground mode (fronts it briefly, then restores)."""
-    result = call(tool, args)
+def read_tool(tool: str, args: dict) -> dict:
+    """Observe. Never changes anything."""
+    return run_json([DRIVER, "call", tool, json.dumps(args)], None, f"cua-driver {tool}")
+
+
+def send_input(tool: str, args: dict) -> dict:
+    """Act on the screen. If the driver refuses because the window sits on another
+    Space, retry once in foreground mode (fronts it briefly, then restores)."""
+    result = read_tool(tool, args)
     if result.get("effect") == "refused" and result.get("escalation", {}).get("recommended") == "foreground":
-        result = call(tool, {**args, "delivery_mode": "foreground"})
+        result = read_tool(tool, {**args, "delivery_mode": "foreground"})
     if result.get("effect") == "refused":
         raise Fail(f"cua-driver refused {tool}: {result.get('reason', '')[:200]}")
     return result
+
+
 
 
 def teams_pid() -> int:
@@ -69,7 +87,7 @@ def teams_pid() -> int:
     if pids:
         return pids[0]
     # Not running: start it in the background (no focus steal) and wait for it.
-    call("launch_app", {"bundle_id": "com.microsoft.teams2"})
+    read_tool("launch_app", {"bundle_id": "com.microsoft.teams2"})
     for _ in range(50):
         time.sleep(0.2)
         proc = subprocess.run(["pgrep", "-x", "MSTeams"], capture_output=True, text=True)
@@ -83,7 +101,7 @@ def main_window(pid: int, wait: float = 45.0) -> dict:
     deadline = time.time() + wait
     while True:
         windows = [
-            w for w in call("list_windows", {"pid": pid})["windows"]
+            w for w in read_tool("list_windows", {"pid": pid})["windows"]
             if w["title"].endswith("| Microsoft Teams")
         ]
         if windows:
@@ -94,7 +112,7 @@ def main_window(pid: int, wait: float = 45.0) -> dict:
 
 
 def snapshot(pid: int, window_id: int) -> list[dict]:
-    state = call("get_window_state", {"pid": pid, "window_id": window_id})
+    state = read_tool("get_window_state", {"pid": pid, "window_id": window_id})
     return [e for e in state["elements"] if e.get("role") not in ("AXMenuItem", "AXMenu", "AXMenuBarItem")]
 
 
@@ -138,7 +156,7 @@ def ensure_chat_view(pid: int, window: dict) -> dict:
 
     if has_chats():
         return window
-    act("hotkey", {"pid": pid, "window_id": window["window_id"], "keys": CHAT_HOTKEY})
+    send_input("hotkey", {"pid": pid, "window_id": window["window_id"], "keys": CHAT_HOTKEY})
     for _ in range(10):
         time.sleep(0.3)
         if has_chats():
@@ -150,10 +168,16 @@ def ensure_chat_view(pid: int, window: dict) -> dict:
     )
 
 
-def jev_pick(query: str, rows: list[dict]) -> dict | None:
-    """Ask Jev which chat title matches. Only titles leave the machine."""
-    rows = rows[:JEV_MAX_CANDIDATES]
-    ids = {f"c{i}": r for i, r in enumerate(rows)}
+def jev_pick(query: str, rows: list[dict]) -> tuple[dict | None, int]:
+    """Ask Jev which chat title matches. Only titles leave the machine.
+
+    Returns the pick (or None) and how many rows the cap kept out of the running.
+    A dropped row is a chat the caller will never learn about, so the caller has to
+    say so rather than report a clean miss."""
+    total = len(rows)
+    considered = rows[:JEV_MAX_CANDIDATES]
+    dropped = total - len(considered)
+    ids = {f"c{i}": r for i, r in enumerate(considered)}
     request = {
         "schema": "jev.action_choice_request_v1",
         "goal": f"Open the Teams chat the person means by: {query}",
@@ -169,25 +193,23 @@ def jev_pick(query: str, rows: list[dict]) -> dict | None:
             {"id": "abstain", "description": "None of these chats is the one meant; ask the person."},
         ],
     }
-    proc = subprocess.run([JEV, "choose"], input=json.dumps(request), capture_output=True, text=True, timeout=30)
-    if proc.returncode != 0:
-        raise Fail(f"jev choose failed: {proc.stderr.strip()[:200]}")
-    choice = json.loads(proc.stdout)
+    choice = run_json([JEV, "choose"], request, "jev choose")
     if choice.get("confidence", 0) < JEV_FLOOR:
-        return None
-    return ids.get(choice.get("selected_id"))
+        return None, dropped
+    return ids.get(choice.get("selected_id")), dropped
 
 
-def resolve(query: str, rows: list[dict]) -> tuple[dict | None, str]:
+def resolve(query: str, rows: list[dict]) -> tuple[dict | None, str, int]:
     """Exact name, then unique substring, then Jev over chat titles only."""
     q = query.casefold()
     exact = [r for r in rows if r["name"].casefold() == q]
     if len(exact) == 1:
-        return exact[0], "exact"
+        return exact[0], "exact", 0
     partial = [r for r in rows if q in r["name"].casefold()]
     if len(partial) == 1:
-        return partial[0], "substring"
-    return jev_pick(query, partial or rows), "jev"
+        return partial[0], "substring", 0
+    row, dropped = jev_pick(query, partial or rows)
+    return row, "jev", dropped
 
 
 TIME_RE = re.compile(r"^(\d{1,2}/\d{1,2}(/\d{2,4})?\s*)?\d{1,2}:\d{2}$|^\d{1,2}/\d{1,2}(/\d{2,4})?$|^(Yesterday|Today)\b")
@@ -270,10 +292,13 @@ def cmd_open(args) -> int:
     pid = teams_pid()
     window = ensure_chat_view(pid, main_window(pid))
     rows = chat_rows(snapshot(pid, window["window_id"]))
-    row, how = resolve(args.query, rows)
+    row, how, dropped = resolve(args.query, rows)
+    searched = len(rows) - dropped
+    partial_note = f"; only the first {searched} of {len(rows)} chats were offered" if dropped else ""
     if not row:
         print(
-            f"ABSTAIN: no chat clearly matches {args.query!r}; run `chats` and pass an exact name",
+            f"ABSTAIN: no chat clearly matches {args.query!r}{partial_note}; "
+            f"run `chats` and pass an exact name",
             file=sys.stderr,
         )
         return 6
@@ -295,7 +320,7 @@ def cmd_open(args) -> int:
 
     # A background click occasionally does not register in the WebView: click once more.
     for attempt in range(2):
-        act("click", {"pid": pid, "window_id": window["window_id"], "element_token": row["token"]})
+        send_input("click", {"pid": pid, "window_id": window["window_id"], "element_token": row["token"]})
         # An occluded Teams window renders slowly, so give the title up to 5 s.
         for _ in range(20):
             time.sleep(0.25)
@@ -315,12 +340,16 @@ def cmd_open(args) -> int:
                 return 4
         break
     if not args.json:
-        print(f"opened {row['name']} ({how})")
+        print(f"opened {row['name']} ({how}{partial_note})")
     if args.read:
         time.sleep(0.4)
         return cmd_read(args, pid, window)
     if args.json:
-        print(json.dumps({"opened": row["name"], "match": how}, ensure_ascii=False))
+        print(json.dumps(
+            {"opened": row["name"], "match": how, "candidates_considered": searched,
+             "candidates_dropped": dropped},
+            ensure_ascii=False,
+        ))
     return 0
 
 
@@ -344,6 +373,8 @@ def main() -> int:
     except Fail as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":
