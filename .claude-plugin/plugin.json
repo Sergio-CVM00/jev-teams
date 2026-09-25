@@ -1,0 +1,25 @@
+{
+  "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "jev-teams",
+  "version": "0.1.0",
+  "description": "Read Microsoft Teams chats on macOS through the accessibility tree, with Jev resolving only the ambiguous chat name.",
+  "author": {
+    "name": "Sergio Cabeza",
+    "url": "https://github.com/Sergio-CVM00"
+  },
+  "homepage": "https://github.com/Sergio-CVM00/jev-teams",
+  "repository": "https://github.com/Sergio-CVM00/jev-teams",
+  "license": "MIT",
+  "keywords": [
+    "jev",
+    "typesafe",
+    "teams",
+    "macos",
+    "accessibility",
+    "computer-use",
+    "agent-skills"
+  ],
+  "skills": [
+    "./skills/jev-teams"
+  ]
+}
